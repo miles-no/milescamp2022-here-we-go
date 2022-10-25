@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"time"
@@ -26,20 +27,25 @@ func main() {
 	}
 }
 
+type Message string
+
+var messages = make(chan Message)
+
 func PostHandler(w http.ResponseWriter, req *http.Request) {
+	data, _ := io.ReadAll(req.Body)
+	messages <- Message(data)
 	w.WriteHeader(http.StatusCreated)
-	fmt.Fprintln(w, "Takk for meldingen ❤️")
+	fmt.Fprintln(w, "Meldingen er levert ❤️")
+	log.Println("Message received and forwarded.")
 }
 
 func GetHandler(w http.ResponseWriter, req *http.Request) {
-	w.WriteHeader(http.StatusNotImplemented)
-	// Drum roll
-	for n := 5; n >= 1; n-- {
-		fmt.Fprintf(w, "%d...\n", n)
+	for {
+		log.Println("Client is waiting for the next message...")
+		msg := <-messages
+		fmt.Fprintln(w, msg)
 		flush(w)
-		time.Sleep(time.Second)
 	}
-	fmt.Fprintln(w, "Jeg har ikke blitt implementert enda 🥹")
 }
 
 // Flush flushes any buffered data to the client, if supported by the response writer.
