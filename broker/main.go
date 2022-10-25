@@ -5,6 +5,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/gorilla/mux"
@@ -12,8 +13,8 @@ import (
 
 func main() {
 	router := mux.NewRouter()
-	router.HandleFunc("/messages", PostHandler).Methods("POST")
-	router.HandleFunc("/messages/next", GetHandler).Methods("GET")
+	router.HandleFunc("/{topic}/messages", PostHandler).Methods("POST")
+	router.HandleFunc("/{topic}/messages/next", GetHandler).Methods("GET")
 
 	srv := http.Server{
 		Addr:         ":8080",
@@ -29,9 +30,26 @@ func main() {
 
 type Message string
 
-var messages = make(chan Message)
+var (
+	mu     sync.Mutex
+	topics = map[string]chan Message{}
+)
+
+func GetTopic(name string) chan Message {
+	mu.Lock()
+	defer mu.Unlock()
+	msgs, ok := topics[name]
+	if !ok {
+		msgs = make(chan Message)
+		topics[name] = msgs
+		log.Printf("Topic '%s' created", name)
+	}
+	return msgs
+}
 
 func PostHandler(w http.ResponseWriter, req *http.Request) {
+	topicName := mux.Vars(req)["topic"]
+	messages := GetTopic(topicName)
 	data, _ := io.ReadAll(req.Body)
 	select {
 	case messages <- Message(data):
@@ -49,8 +67,10 @@ func PostHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 func GetHandler(w http.ResponseWriter, req *http.Request) {
+	topicName := mux.Vars(req)["topic"]
+	messages := GetTopic(topicName)
 	for {
-		log.Println("Client is waiting for the next message...")
+		log.Printf("Client is waiting for the next message on topic %s...", topicName)
 		select {
 		case msg := <-messages:
 			fmt.Fprintln(w, msg)
