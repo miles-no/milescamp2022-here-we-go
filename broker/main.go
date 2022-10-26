@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"path"
 	"sync"
 	"time"
 
@@ -47,6 +49,20 @@ func GetTopic(name string) chan Message {
 	return msgs
 }
 
+func GetTopics(pattern string) []chan Message {
+	mu.Lock()
+	defer mu.Unlock()
+	matched := []chan Message{}
+	for name, msgs := range topics {
+		ok, _ := path.Match(pattern, name)
+		if !ok {
+			continue
+		}
+		matched = append(matched, msgs)
+	}
+	return matched
+}
+
 func PostHandler(w http.ResponseWriter, req *http.Request) {
 	topicName := mux.Vars(req)["topic"]
 	messages := GetTopic(topicName)
@@ -67,10 +83,16 @@ func PostHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 func GetHandler(w http.ResponseWriter, req *http.Request) {
-	topicName := mux.Vars(req)["topic"]
-	messages := GetTopic(topicName)
+	topicsPattern := mux.Vars(req)["topic"]
+	topics := GetTopics(topicsPattern)
+	if len(topics) == 0 {
+		http.Error(w, "No topic matching pattern", http.StatusNotFound)
+		return
+	}
+	log.Printf("New client matching %d topics", len(topics))
+	messages := fanIn(req.Context(), topics)
 	for {
-		log.Printf("Client is waiting for the next message on topic %s...", topicName)
+		log.Printf("Client is waiting for the next message on topic(s) with pattern '%s'...", topicsPattern)
 		select {
 		case msg := <-messages:
 			fmt.Fprintln(w, msg)
@@ -80,6 +102,24 @@ func GetHandler(w http.ResponseWriter, req *http.Request) {
 			return
 		}
 	}
+}
+
+func fanIn(ctx context.Context, slice []chan Message) <-chan Message {
+	out := make(chan Message, len(slice))
+	for _, msgs := range slice {
+		msgs := msgs
+		go func() {
+			for {
+				select {
+				case msg := <-msgs:
+					out <- msg
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+	}
+	return out
 }
 
 // Flush flushes any buffered data to the client, if supported by the response writer.
