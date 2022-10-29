@@ -105,15 +105,21 @@ func GetHandler(w http.ResponseWriter, req *http.Request) {
 }
 
 func fanIn(ctx context.Context, slice []chan Message) <-chan Message {
-	out := make(chan Message, len(slice))
+	out := make(chan Message)
 	for _, msgs := range slice {
 		msgs := msgs
 		go func() {
 			for {
 				select {
 				case msg := <-msgs:
-					out <- msg
+					select {
+					case out <- msg:
+					case <-ctx.Done():
+						// Consumer exited before receiving the message.
+						return
+					}
 				case <-ctx.Done():
+					// Consumer exited while waiting for the message.
 					return
 				}
 			}
